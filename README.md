@@ -1,6 +1,6 @@
 # parrot
 
-A minimal macOS dictation daemon. Push-to-talk, on-device transcription, text inserted at the cursor.
+A minimal macOS dictation daemon. Push-to-talk, on-device transcription, text inserted at the cursor. (Fork from https://github.com/digimata/parrot)
 
 ## Install
 
