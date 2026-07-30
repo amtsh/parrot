@@ -16,6 +16,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let launchAtLoginItem: NSMenuItem
     private let versionItem: NSMenuItem
     private var availableUpdateTag: String?
+    private var confirmedUpToDate = false
     private var isDevBuild: Bool { parrotVersion == "dev" }
 
     private let permissionsMenu: NSMenu
@@ -203,7 +204,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             versionItem.title = "★ Update to \(tag) available"
             versionItem.isEnabled = true
         } else {
-            versionItem.attributedTitle = Self.trailingMutedTitle("Check for Updates", version: parrotVersion)
+            let version = confirmedUpToDate ? "\(parrotVersion) latest" : parrotVersion
+            versionItem.attributedTitle = Self.trailingMutedTitle("Check for Updates", version: version)
             versionItem.isEnabled = true
         }
     }
@@ -235,12 +237,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// Call when UpdateChecker finds a newer release.
     func setUpdateAvailable(_ tag: String) {
         availableUpdateTag = tag
+        confirmedUpToDate = false
         refreshVersionItem()
     }
 
-    /// Call when a check completes and nothing newer was found.
+    /// Call when a check completes and nothing newer was found — appends
+    /// "latest" to the muted version so a manual check gives visible
+    /// confirmation, not just silence.
     func setUpToDate() {
         availableUpdateTag = nil
+        confirmedUpToDate = true
         refreshVersionItem()
     }
 
