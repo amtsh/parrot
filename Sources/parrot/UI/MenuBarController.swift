@@ -190,24 +190,44 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         launchAtLoginItem.state = LaunchAgentManager.isInstalled() ? .on : .off
     }
 
-    /// Reflects current update state: dev builds show a disabled "Version:
-    /// dev"; otherwise shows an install prompt if an update was found, or
-    /// "Version: vX.Y.Z (up to date)" — clicking either checks or installs.
+    /// Reflects current update state: normally "Check for Updates" with the
+    /// running version muted on the right (clicking checks); dev builds
+    /// show the same but disabled with "dev" in place of a version; once an
+    /// update is found the whole row switches to a plain install prompt.
     private func refreshVersionItem() {
+        versionItem.attributedTitle = nil
         if isDevBuild {
-            versionItem.title = "Version: dev"
+            versionItem.attributedTitle = Self.trailingMutedTitle("Check for Updates", version: "dev")
             versionItem.isEnabled = false
         } else if let tag = availableUpdateTag {
             versionItem.title = "★ Update to \(tag) available"
             versionItem.isEnabled = true
         } else {
-            versionItem.title = "Version: \(parrotVersion) (up to date)"
+            versionItem.attributedTitle = Self.trailingMutedTitle("Check for Updates", version: parrotVersion)
             versionItem.isEnabled = true
         }
     }
 
+    private static func trailingMutedTitle(_ label: String, version: String) -> NSAttributedString {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.tabStops = [NSTextTab(textAlignment: .right, location: 200)]
+        paragraphStyle.defaultTabInterval = 200
+
+        let result = NSMutableAttributedString(
+            string: "\(label)\t\(version)",
+            attributes: [
+                .font: NSFont.menuFont(ofSize: 0),
+                .paragraphStyle: paragraphStyle,
+            ]
+        )
+        let versionRange = NSRange(location: (label as NSString).length + 1, length: (version as NSString).length)
+        result.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: versionRange)
+        return result
+    }
+
     /// Call while a manually-triggered check is in flight.
     func setCheckingForUpdate() {
+        versionItem.attributedTitle = nil
         versionItem.title = "Checking for updates…"
         versionItem.isEnabled = false
     }
@@ -226,6 +246,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     /// Call while the update is downloading/installing.
     func setUpdateInstalling() {
+        versionItem.attributedTitle = nil
         versionItem.title = "Updating…"
         versionItem.isEnabled = false
     }
