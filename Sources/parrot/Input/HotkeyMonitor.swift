@@ -76,6 +76,17 @@ final class HotkeyMonitor {
         onEvent = nil
     }
 
+    /// The system disables a tap after a timeout or excessive load; without
+    /// re-enabling it, dictation would silently stop working until the user
+    /// noticed and manually restarted parrot.
+    fileprivate func handleTapDisabled() {
+        guard let tap else { return }
+        CGEvent.tapEnable(tap: tap, enable: true)
+        FileHandle.standardError.write(Data(
+            "⚠ hotkey tap was disabled by the system — re-enabled\n".utf8
+        ))
+    }
+
     fileprivate func handle(type: CGEventType, event: CGEvent) {
         if debug {
             let flags = event.flags
@@ -104,8 +115,7 @@ private func hotkeyCallback(
     let monitor = Unmanaged<HotkeyMonitor>.fromOpaque(userInfo).takeUnretainedValue()
 
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-        // System disabled our tap; we'll need to re-enable. For now just no-op
-        // and let the user restart parrot.
+        monitor.handleTapDisabled()
         return Unmanaged.passUnretained(event)
     }
 
