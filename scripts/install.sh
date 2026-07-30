@@ -8,6 +8,9 @@
 #
 # Apple Silicon only — WhisperKit uses the Apple Neural Engine via CoreML,
 # which only ships on M-series chips.
+#
+# To uninstall: `parrot install --uninstall`, quit parrot from the menu
+# bar (or `killall parrot`), then `sudo rm /usr/local/bin/parrot`.
 
 set -euo pipefail
 
@@ -92,6 +95,4 @@ $SUDO chmod +x "${INSTALL_DIR}/${BIN_NAME}"
 green "✓ parrot ${TAG} installed at ${INSTALL_DIR}/${BIN_NAME}"
 echo
 echo "next:"
-echo "  parrot setup                       # grant mic + accessibility"
-echo "  parrot install --launch-at-login   # (optional) start at login"
-echo "  parrot                             # run the daemon"
+echo "  parrot   # run it — the menu bar will walk you through permissions"

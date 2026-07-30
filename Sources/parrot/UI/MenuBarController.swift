@@ -13,36 +13,24 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var activeModelID: String
 
     private let overlayItem: NSMenuItem
-    private let debugHotkeyItem: NSMenuItem
-    private let dumpWavItem: NSMenuItem
     private let launchAtLoginItem: NSMenuItem
 
-    private let setupSeparator: NSMenuItem
+    private let permissionsMenu: NSMenu
     private let accessibilityItem: NSMenuItem
     private let microphoneItem: NSMenuItem
+    private let fnKeySeparator: NSMenuItem
     private let fnKeyItem: NSMenuItem
 
     var onSelectModel: (TranscriptionModel) -> Void = { _ in }
     var onToggleOverlay: (Bool) -> Void = { _ in }
-    var onToggleDebugHotkey: (Bool) -> Void = { _ in }
-    var onToggleDumpWav: (Bool) -> Void = { _ in }
     var onToggleLaunchAtLogin: (Bool) -> Void = { _ in }
 
-    init(
-        modelID: String,
-        overlayEnabled: Bool,
-        debugHotkeyEnabled: Bool,
-        dumpWavEnabled: Bool
-    ) {
+    init(modelID: String, overlayEnabled: Bool) {
         self.activeModelID = modelID
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         overlayItem = NSMenuItem(title: "Recording Overlay", action: nil, keyEquivalent: "")
         overlayItem.state = overlayEnabled ? .on : .off
-        debugHotkeyItem = NSMenuItem(title: "Log Hotkey Events (debug)", action: nil, keyEquivalent: "")
-        debugHotkeyItem.state = debugHotkeyEnabled ? .on : .off
-        dumpWavItem = NSMenuItem(title: "Save Last Recording (.wav)", action: nil, keyEquivalent: "")
-        dumpWavItem.state = dumpWavEnabled ? .on : .off
         launchAtLoginItem = NSMenuItem(title: "Start at Login", action: nil, keyEquivalent: "")
 
         let menu = NSMenu()
@@ -52,13 +40,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         stateLabel.isEnabled = false
         menu.addItem(stateLabel)
 
-        setupSeparator = .separator()
-        accessibilityItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        microphoneItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        permissionsMenu = NSMenu()
+        accessibilityItem = NSMenuItem(title: "Accessibility", action: nil, keyEquivalent: "")
+        microphoneItem = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
+        permissionsMenu.addItem(accessibilityItem)
+        permissionsMenu.addItem(microphoneItem)
+        let permissionsMenuItem = NSMenuItem(title: "Permissions", action: nil, keyEquivalent: "")
+        menu.addItem(permissionsMenuItem)
+        menu.setSubmenu(permissionsMenu, for: permissionsMenuItem)
+
+        fnKeySeparator = .separator()
         fnKeyItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        menu.addItem(setupSeparator)
-        menu.addItem(accessibilityItem)
-        menu.addItem(microphoneItem)
+        menu.addItem(fnKeySeparator)
         menu.addItem(fnKeyItem)
 
         modelLabel = NSMenuItem(title: "model: \(modelID)", action: nil, keyEquivalent: "")
@@ -72,8 +65,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
         menu.addItem(overlayItem)
-        menu.addItem(debugHotkeyItem)
-        menu.addItem(dumpWavItem)
 
         menu.addItem(.separator())
         menu.addItem(launchAtLoginItem)
@@ -90,10 +81,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.delegate = self
         overlayItem.target = self
         overlayItem.action = #selector(overlayClicked)
-        debugHotkeyItem.target = self
-        debugHotkeyItem.action = #selector(debugHotkeyClicked)
-        dumpWavItem.target = self
-        dumpWavItem.action = #selector(dumpWavClicked)
         launchAtLoginItem.target = self
         launchAtLoginItem.action = #selector(launchAtLoginClicked)
         accessibilityItem.target = self
@@ -102,6 +89,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         microphoneItem.action = #selector(microphoneClicked)
         fnKeyItem.target = self
         fnKeyItem.action = #selector(fnKeyClicked)
+        permissionsMenu.delegate = self
         quit.target = self
         quit.action = #selector(quitClicked)
 
@@ -115,22 +103,22 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         refreshPermissionStatus()
     }
 
-    /// Re-reads accessibility/microphone/fn-key status and updates the Setup
-    /// section. The section (and its separator) hides itself once everything
-    /// is OK. Safe to call from anywhere, including a background poll timer.
+    /// Re-reads accessibility/microphone/fn-key status. The Permissions
+    /// submenu items reflect grant state as checkmarks; the fn-key item
+    /// (not a revocable permission, so it doesn't belong in that submenu)
+    /// hides itself once the mapping is correct. Safe to call from anywhere,
+    /// including a background poll timer.
     func refreshPermissionStatus() {
         let checks = DoctorReport.run()
         let accessibilityOK = isOK(checks, "accessibility")
         let microphoneOK = isOK(checks, "microphone")
         let fnKeyOK = isOK(checks, "fn key mapping")
 
-        accessibilityItem.title = accessibilityOK ? "✓ Accessibility" : "✗ Grant Accessibility…"
-        accessibilityItem.isHidden = accessibilityOK
-        microphoneItem.title = microphoneOK ? "✓ Microphone" : "✗ Grant Microphone…"
-        microphoneItem.isHidden = microphoneOK
+        accessibilityItem.state = accessibilityOK ? .on : .off
+        microphoneItem.state = microphoneOK ? .on : .off
         fnKeyItem.title = fnKeyOK ? "✓ Fn Key Mapping" : "✗ Fix Fn Key Mapping…"
         fnKeyItem.isHidden = fnKeyOK
-        setupSeparator.isHidden = accessibilityOK && microphoneOK && fnKeyOK
+        fnKeySeparator.isHidden = fnKeyOK
     }
 
     private func isOK(_ checks: [Check], _ name: String) -> Bool {
@@ -147,15 +135,26 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func accessibilityClicked() {
-        PermissionActions.promptAccessibility()
+        if accessibilityItem.state == .on {
+            // Can't revoke programmatically — open the pane to do it manually.
+            PermissionActions.openAccessibilitySettings()
+        } else {
+            PermissionActions.promptAccessibility()
+        }
         refreshPermissionStatus()
     }
 
     @objc private func microphoneClicked() {
-        PermissionActions.requestMicrophone { [weak self] _ in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                MainActor.assumeIsolated { self.refreshPermissionStatus() }
+        if microphoneItem.state == .on {
+            // Can't revoke programmatically — open the pane to do it manually.
+            PermissionActions.openMicrophoneSettings()
+            refreshPermissionStatus()
+        } else {
+            PermissionActions.requestMicrophone { [weak self] _ in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    MainActor.assumeIsolated { self.refreshPermissionStatus() }
+                }
             }
         }
     }
@@ -168,18 +167,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let enabled = overlayItem.state != .on
         overlayItem.state = enabled ? .on : .off
         onToggleOverlay(enabled)
-    }
-
-    @objc private func debugHotkeyClicked() {
-        let enabled = debugHotkeyItem.state != .on
-        debugHotkeyItem.state = enabled ? .on : .off
-        onToggleDebugHotkey(enabled)
-    }
-
-    @objc private func dumpWavClicked() {
-        let enabled = dumpWavItem.state != .on
-        dumpWavItem.state = enabled ? .on : .off
-        onToggleDumpWav(enabled)
     }
 
     @objc private func launchAtLoginClicked() {

@@ -41,6 +41,11 @@ struct Run: ParsableCommand {
     var model: String?
 
     func run() throws {
+        if let pid = RunLock.existingPID() {
+            print("parrot is already running (pid \(pid)) — check the menu bar")
+            return
+        }
+
         if !foreground && isatty(STDOUT_FILENO) != 0 {
             try daemonize()
             return
@@ -51,23 +56,23 @@ struct Run: ParsableCommand {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
 
-        let toggles = RuntimeToggles(
-            overlayEnabled: !noOverlay,
-            dumpWavEnabled: dumpWav,
-            debugHotkeyEnabled: debugHotkey
-        )
+        let toggles = RuntimeToggles(overlayEnabled: !noOverlay)
 
-        let monitor = HotkeyMonitor(debug: toggles.debugHotkeyEnabled)
+        let monitor = HotkeyMonitor(debug: debugHotkey)
         let capture = AudioCapture()
         let overlay = MainActor.assumeIsolated { RecordingOverlay() }
         capture.onLevel = { level in overlay.pushLevel(level) }
         let menuBar = MainActor.assumeIsolated {
-            MenuBarController(
-                modelID: chosenModel.id,
-                overlayEnabled: toggles.overlayEnabled,
-                debugHotkeyEnabled: toggles.debugHotkeyEnabled,
-                dumpWavEnabled: toggles.dumpWavEnabled
-            )
+            MenuBarController(modelID: chosenModel.id, overlayEnabled: toggles.overlayEnabled)
+        }
+
+        RunLock.acquire()
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            RunLock.release()
         }
 
         let transcriber = WhisperKitTranscriber(model: chosenModel)
@@ -106,13 +111,6 @@ struct Run: ParsableCommand {
             menuBar.onToggleOverlay = { enabled in
                 toggles.overlayEnabled = enabled
                 if !enabled { overlay.hide() }
-            }
-            menuBar.onToggleDebugHotkey = { enabled in
-                toggles.debugHotkeyEnabled = enabled
-                monitor.debug = enabled
-            }
-            menuBar.onToggleDumpWav = { enabled in
-                toggles.dumpWavEnabled = enabled
             }
             menuBar.onToggleLaunchAtLogin = { enabled in
                 do {
@@ -155,7 +153,7 @@ struct Run: ParsableCommand {
                         FileHandle.standardError.write(Data(
                             String(format: "○ captured %.2fs · rms %.3f\n", seconds, rms).utf8
                         ))
-                        if toggles.dumpWavEnabled, !samples.isEmpty {
+                        if dumpWav, !samples.isEmpty {
                             let path = "/tmp/parrot-last.wav"
                             do {
                                 try WAVWriter.write(samples: samples, sampleRate: 16_000, to: path)
@@ -268,6 +266,10 @@ struct Run: ParsableCommand {
     /// granted (a trust grant only takes effect for a fresh process), then
     /// terminates this one.
     private static func relaunchSelf(args: [String]) {
+        // Release before spawning — otherwise the child's own startup check
+        // sees this still-terminating process's PID and thinks a duplicate
+        // instance is running.
+        RunLock.release()
         guard let process = try? spawnSelf(args: args) else {
             FileHandle.standardError.write(Data("relaunch failed\n".utf8))
             return

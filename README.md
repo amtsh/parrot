@@ -6,13 +6,20 @@ A minimal macOS dictation daemon. Push-to-talk, on-device transcription, text in
 
 ```sh
 curl -fsSL https://amtsh.github.io/parrot/scripts/install.sh | sh
-parrot setup                       # grants mic + accessibility, downloads the model
-parrot install --launch-at-login   # optional — runs in the background on login
+parrot   # run it — the menu bar will walk you through permissions
 ```
 
 **Requires:** macOS 14+ on Apple Silicon (M1 or newer). Transcription runs on the Apple Neural Engine via CoreML — so the installer refuses to run on Intel.
 
 The installer drops the binary in `/usr/local/bin/parrot`. Builds are unsigned for now, so the installer strips the quarantine xattr — once you've inspected the script you'll see exactly what it does.
+
+## Uninstall
+
+```sh
+parrot install --uninstall   # remove the login LaunchAgent, if you set one up
+                              # then quit parrot from the menu bar (or `killall parrot`)
+sudo rm /usr/local/bin/parrot
+```
 
 ## How to use
 
@@ -24,7 +31,7 @@ The installer drops the binary in `/usr/local/bin/parrot`. Builds are unsigned f
 
 That's it. There is no record button, no stop button, no "send" — `fn` is the whole interface.
 
-Once everything's granted, the bird icon in the menu bar gives you: a **Model** submenu to switch transcription models on the fly, checkboxes for the recording overlay / hotkey-debug logging / last-recording capture, a **Start at Login** toggle, and **Quit**.
+Once everything's granted, the bird icon in the menu bar gives you: a **Model** submenu to switch transcription models on the fly, a **Recording Overlay** checkbox, a **Start at Login** toggle, and **Quit**.
 
 > **Note:** on most modern Macs the `fn` key is the bottom-left key. If yours is set to "Change input source" or "Show emoji & symbols," the menu bar's Setup section will flag it — click through to Keyboard Settings to flip it back to plain `fn`. (`parrot setup` still exists as a terminal-only walkthrough if you prefer it.)
 

@@ -5,12 +5,8 @@ import Foundation
 /// the main thread (menu clicks and the hotkey event callback both run there).
 final class RuntimeToggles {
     var overlayEnabled: Bool
-    var dumpWavEnabled: Bool
-    var debugHotkeyEnabled: Bool
 
-    init(overlayEnabled: Bool, dumpWavEnabled: Bool, debugHotkeyEnabled: Bool) {
+    init(overlayEnabled: Bool) {
         self.overlayEnabled = overlayEnabled
-        self.dumpWavEnabled = dumpWavEnabled
-        self.debugHotkeyEnabled = debugHotkeyEnabled
     }
 }

@@ -32,6 +32,13 @@ enum PermissionActions {
         open("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
     }
 
+    /// macOS has no API for an app to revoke its own TCC grant — only System
+    /// Settings (or `tccutil`) can turn accessibility/microphone back off.
+    /// This is the closest a "revoke" click can do.
+    static func openAccessibilitySettings() {
+        open("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+    }
+
     static func openKeyboardSettings() {
         open("x-apple.systempreferences:com.apple.preference.keyboard")
     }
