@@ -5,8 +5,10 @@ import Foundation
 /// the main thread (menu clicks and the hotkey event callback both run there).
 final class RuntimeToggles {
     var overlayEnabled: Bool
+    var cleanupEnabled: Bool
 
-    init(overlayEnabled: Bool) {
+    init(overlayEnabled: Bool, cleanupEnabled: Bool) {
         self.overlayEnabled = overlayEnabled
+        self.cleanupEnabled = cleanupEnabled
     }
 }

@@ -13,6 +13,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var activeModelID: String
 
     private let overlayItem: NSMenuItem
+    private let cleanupItem: NSMenuItem?
     private let launchAtLoginItem: NSMenuItem
     private let versionItem: NSMenuItem
     private var availableUpdateTag: String?
@@ -27,16 +28,28 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     var onSelectModel: (TranscriptionModel) -> Void = { _ in }
     var onToggleOverlay: (Bool) -> Void = { _ in }
+    var onToggleCleanup: (Bool) -> Void = { _ in }
     var onToggleLaunchAtLogin: (Bool) -> Void = { _ in }
     var onInstallUpdate: (String) -> Void = { _ in }
     var onCheckForUpdate: () -> Void = {}
 
-    init(modelID: String, overlayEnabled: Bool) {
+    /// `cleanupAvailable` is decided once at launch (Apple Intelligence's
+    /// on-device model either is or isn't usable on this Mac) — the row
+    /// simply doesn't exist when it's not, rather than showing a permanently
+    /// disabled option nobody can act on.
+    init(modelID: String, overlayEnabled: Bool, cleanupAvailable: Bool, cleanupEnabled: Bool) {
         self.activeModelID = modelID
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         overlayItem = NSMenuItem(title: "Recording Overlay", action: nil, keyEquivalent: "")
         overlayItem.state = overlayEnabled ? .on : .off
+        if cleanupAvailable {
+            let item = NSMenuItem(title: "Auto Text Cleanup", action: nil, keyEquivalent: "")
+            item.state = cleanupEnabled ? .on : .off
+            cleanupItem = item
+        } else {
+            cleanupItem = nil
+        }
         launchAtLoginItem = NSMenuItem(title: "Start at Login", action: nil, keyEquivalent: "")
         versionItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
 
@@ -61,6 +74,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.setSubmenu(modelMenu, for: modelMenuItem)
 
         menu.addItem(overlayItem)
+        if let cleanupItem {
+            menu.addItem(cleanupItem)
+        }
 
         menu.addItem(.separator())
 
@@ -94,6 +110,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.delegate = self
         overlayItem.target = self
         overlayItem.action = #selector(overlayClicked)
+        cleanupItem?.target = self
+        cleanupItem?.action = #selector(cleanupClicked)
         launchAtLoginItem.target = self
         launchAtLoginItem.action = #selector(launchAtLoginClicked)
         accessibilityItem.target = self
@@ -183,6 +201,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let enabled = overlayItem.state != .on
         overlayItem.state = enabled ? .on : .off
         onToggleOverlay(enabled)
+    }
+
+    @objc private func cleanupClicked() {
+        guard let cleanupItem else { return }
+        let enabled = cleanupItem.state != .on
+        cleanupItem.state = enabled ? .on : .off
+        onToggleCleanup(enabled)
     }
 
     @objc private func launchAtLoginClicked() {

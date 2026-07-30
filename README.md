@@ -31,7 +31,7 @@ sudo rm /usr/local/bin/parrot
 
 That's it. There is no record button, no stop button, no "send" — `fn` is the whole interface.
 
-Once everything's granted, the bird icon in the menu bar gives you: a **Model** submenu to switch transcription models on the fly, a **Recording Overlay** checkbox, a **Start at Login** toggle, and **Quit**.
+Once everything's granted, the bird icon in the menu bar gives you: a **Model** submenu to switch transcription models on the fly, a **Recording Overlay** checkbox, an **Auto Text Cleanup** checkbox (on by default, only shown if Apple Intelligence's on-device model is available — strips filler words and fixes punctuation/capitalization, entirely on-device), a **Start at Login** toggle, and **Quit**.
 
 > **Note:** on most modern Macs the `fn` key is the bottom-left key. If yours is set to "Change input source" or "Show emoji & symbols," the menu bar's Setup section will flag it — click through to Keyboard Settings to flip it back to plain `fn`. (`parrot setup` still exists as a terminal-only walkthrough if you prefer it.)
 

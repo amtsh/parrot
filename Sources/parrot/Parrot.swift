@@ -56,14 +56,24 @@ struct Run: ParsableCommand {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
 
-        let toggles = RuntimeToggles(overlayEnabled: !noOverlay)
+        let toggles = RuntimeToggles(overlayEnabled: !noOverlay, cleanupEnabled: CleanupPreference.enabled)
+
+        // Decided once at launch: Apple Intelligence's on-device model either
+        // is or isn't usable on this Mac. nil means unavailable — the menu
+        // bar simply won't show the row, and cleanup is skipped entirely.
+        let cleanup = TranscriptCleanupFactory.make()
 
         let monitor = HotkeyMonitor(debug: debugHotkey)
         let capture = AudioCapture()
         let overlay = MainActor.assumeIsolated { RecordingOverlay() }
         capture.onLevel = { level in overlay.pushLevel(level) }
         let menuBar = MainActor.assumeIsolated {
-            MenuBarController(modelID: chosenModel.id, overlayEnabled: toggles.overlayEnabled)
+            MenuBarController(
+                modelID: chosenModel.id,
+                overlayEnabled: toggles.overlayEnabled,
+                cleanupAvailable: cleanup != nil,
+                cleanupEnabled: toggles.cleanupEnabled
+            )
         }
 
         RunLock.acquire()
@@ -138,6 +148,10 @@ struct Run: ParsableCommand {
             menuBar.onToggleOverlay = { enabled in
                 toggles.overlayEnabled = enabled
                 if !enabled { overlay.hide() }
+            }
+            menuBar.onToggleCleanup = { enabled in
+                toggles.cleanupEnabled = enabled
+                CleanupPreference.enabled = enabled
             }
             menuBar.onToggleLaunchAtLogin = { enabled in
                 do {
@@ -227,6 +241,18 @@ struct Run: ParsableCommand {
                                     TextInjector.inject(text)
                                     overlay.hide()
                                     menuBar.setRecording(false)
+                                }
+                                // Paste immediately so latency never regresses, then
+                                // swap in the cleaned-up version afterward if it's
+                                // available and enabled. Only ever replaces what we
+                                // ourselves just typed — see TextInjector.replace.
+                                if let cleanup, toggles.cleanupEnabled {
+                                    let cleaned = await cleanup(text)
+                                    if cleaned != text {
+                                        await MainActor.run {
+                                            TextInjector.replace(previous: text, with: cleaned)
+                                        }
+                                    }
                                 }
                             } catch {
                                 FileHandle.standardError.write(Data("transcription failed: \(error)\n".utf8))
