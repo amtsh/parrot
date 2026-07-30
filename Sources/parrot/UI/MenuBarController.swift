@@ -14,8 +14,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private let overlayItem: NSMenuItem
     private let launchAtLoginItem: NSMenuItem
-    private let updateItem: NSMenuItem
+    private let versionItem: NSMenuItem
     private var availableUpdateTag: String?
+    private var isDevBuild: Bool { parrotVersion == "dev" }
 
     private let permissionsMenu: NSMenu
     private let accessibilityItem: NSMenuItem
@@ -27,6 +28,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     var onToggleOverlay: (Bool) -> Void = { _ in }
     var onToggleLaunchAtLogin: (Bool) -> Void = { _ in }
     var onInstallUpdate: (String) -> Void = { _ in }
+    var onCheckForUpdate: () -> Void = {}
 
     init(modelID: String, overlayEnabled: Bool) {
         self.activeModelID = modelID
@@ -35,8 +37,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         overlayItem = NSMenuItem(title: "Recording Overlay", action: nil, keyEquivalent: "")
         overlayItem.state = overlayEnabled ? .on : .off
         launchAtLoginItem = NSMenuItem(title: "Start at Login", action: nil, keyEquivalent: "")
-        updateItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        updateItem.isHidden = true
+        versionItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
 
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -45,7 +46,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         stateLabel.isEnabled = false
         menu.addItem(stateLabel)
 
-        menu.addItem(updateItem)
+        menu.addItem(versionItem)
 
         permissionsMenu = NSMenu()
         accessibilityItem = NSMenuItem(title: "Accessibility", action: nil, keyEquivalent: "")
@@ -97,14 +98,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         fnKeyItem.target = self
         fnKeyItem.action = #selector(fnKeyClicked)
         permissionsMenu.delegate = self
-        updateItem.target = self
-        updateItem.action = #selector(updateClicked)
+        versionItem.target = self
+        versionItem.action = #selector(versionClicked)
         quit.target = self
         quit.action = #selector(quitClicked)
 
         configureButton(recording: false)
         rebuildModelMenu()
         refreshPermissionStatus()
+        refreshVersionItem()
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -184,32 +186,58 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         launchAtLoginItem.state = LaunchAgentManager.isInstalled() ? .on : .off
     }
 
+    /// Reflects current update state: dev builds show a disabled "Version:
+    /// dev"; otherwise shows an install prompt if an update was found, or
+    /// "Version: vX.Y.Z (up to date)" — clicking either checks or installs.
+    private func refreshVersionItem() {
+        if isDevBuild {
+            versionItem.title = "Version: dev"
+            versionItem.isEnabled = false
+        } else if let tag = availableUpdateTag {
+            versionItem.title = "★ Update to \(tag) available"
+            versionItem.isEnabled = true
+        } else {
+            versionItem.title = "Version: \(parrotVersion) (up to date)"
+            versionItem.isEnabled = true
+        }
+    }
+
+    /// Call while a manually-triggered check is in flight.
+    func setCheckingForUpdate() {
+        versionItem.title = "Checking for updates…"
+        versionItem.isEnabled = false
+    }
+
     /// Call when UpdateChecker finds a newer release.
     func setUpdateAvailable(_ tag: String) {
         availableUpdateTag = tag
-        updateItem.title = "★ Update to \(tag) available"
-        updateItem.isHidden = false
-        updateItem.isEnabled = true
+        refreshVersionItem()
+    }
+
+    /// Call when a check completes and nothing newer was found.
+    func setUpToDate() {
+        availableUpdateTag = nil
+        refreshVersionItem()
     }
 
     /// Call while the update is downloading/installing.
     func setUpdateInstalling() {
-        updateItem.title = "Updating…"
-        updateItem.isEnabled = false
+        versionItem.title = "Updating…"
+        versionItem.isEnabled = false
     }
 
-    /// Call if the install fails; reverts to the clickable "available" state.
+    /// Call if the install fails; reverts to the clickable "available" state
+    /// (still holding the same tag) so the user can retry.
     func setUpdateFailed() {
-        guard let tag = availableUpdateTag else {
-            updateItem.isHidden = true
-            return
-        }
-        setUpdateAvailable(tag)
+        refreshVersionItem()
     }
 
-    @objc private func updateClicked() {
-        guard let tag = availableUpdateTag else { return }
-        onInstallUpdate(tag)
+    @objc private func versionClicked() {
+        if let tag = availableUpdateTag {
+            onInstallUpdate(tag)
+        } else if !isDevBuild {
+            onCheckForUpdate()
+        }
     }
 
     private func rebuildModelMenu() {
