@@ -42,11 +42,26 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
+        // Order is deliberate, grouped by how often each row actually
+        // matters: live status, then the controls people actually click,
+        // then one-time setup/diagnostics, then set-and-forget config,
+        // then Quit last.
         stateLabel = NSMenuItem(title: "idle · hold fn to dictate", action: nil, keyEquivalent: "")
         stateLabel.isEnabled = false
         menu.addItem(stateLabel)
 
-        menu.addItem(versionItem)
+        modelLabel = NSMenuItem(title: "model: \(modelID)", action: nil, keyEquivalent: "")
+        modelLabel.isEnabled = false
+        menu.addItem(modelLabel)
+
+        modelMenu = NSMenu()
+        let modelMenuItem = NSMenuItem(title: "Model", action: nil, keyEquivalent: "")
+        menu.addItem(modelMenuItem)
+        menu.setSubmenu(modelMenu, for: modelMenuItem)
+
+        menu.addItem(overlayItem)
+
+        menu.addItem(.separator())
 
         permissionsMenu = NSMenu()
         accessibilityItem = NSMenuItem(title: "Accessibility", action: nil, keyEquivalent: "")
@@ -62,20 +77,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(fnKeySeparator)
         menu.addItem(fnKeyItem)
 
-        modelLabel = NSMenuItem(title: "model: \(modelID)", action: nil, keyEquivalent: "")
-        modelLabel.isEnabled = false
-        menu.addItem(modelLabel)
-
-        modelMenu = NSMenu()
-        let modelMenuItem = NSMenuItem(title: "Model", action: nil, keyEquivalent: "")
-        menu.addItem(modelMenuItem)
-        menu.setSubmenu(modelMenu, for: modelMenuItem)
-
-        menu.addItem(.separator())
-        menu.addItem(overlayItem)
-
         menu.addItem(.separator())
         menu.addItem(launchAtLoginItem)
+        menu.addItem(versionItem)
 
         menu.addItem(.separator())
 
