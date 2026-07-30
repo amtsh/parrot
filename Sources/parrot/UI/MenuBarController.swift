@@ -28,6 +28,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     var onToggleOverlay: (Bool) -> Void = { _ in }
     var onToggleLaunchAtLogin: (Bool) -> Void = { _ in }
     var onInstallUpdate: (String) -> Void = { _ in }
+    var onCheckForUpdate: () -> Void = {}
 
     init(modelID: String, overlayEnabled: Bool) {
         self.activeModelID = modelID
@@ -191,8 +192,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     /// Reflects current update state: dev builds show a disabled "Version:
     /// dev"; otherwise shows an install prompt if an update was found, or
-    /// "Version: vX.Y.Z (up to date)" — clicking either opens the releases
-    /// page or installs.
+    /// "Version: vX.Y.Z (up to date)" — clicking either checks or installs.
     private func refreshVersionItem() {
         if isDevBuild {
             versionItem.title = "Version: dev"
@@ -206,9 +206,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
+    /// Call while a manually-triggered check is in flight.
+    func setCheckingForUpdate() {
+        versionItem.title = "Checking for updates…"
+        versionItem.isEnabled = false
+    }
+
     /// Call when UpdateChecker finds a newer release.
     func setUpdateAvailable(_ tag: String) {
         availableUpdateTag = tag
+        refreshVersionItem()
+    }
+
+    /// Call when a check completes and nothing newer was found.
+    func setUpToDate() {
+        availableUpdateTag = nil
         refreshVersionItem()
     }
 
@@ -227,8 +239,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func versionClicked() {
         if let tag = availableUpdateTag {
             onInstallUpdate(tag)
-        } else if !isDevBuild, let url = URL(string: "https://github.com/amtsh/parrot/releases") {
-            NSWorkspace.shared.open(url)
+        } else if !isDevBuild {
+            onCheckForUpdate()
         }
     }
 

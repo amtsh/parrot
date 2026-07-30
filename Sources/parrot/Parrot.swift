@@ -75,20 +75,30 @@ struct Run: ParsableCommand {
             RunLock.release()
         }
 
-        /// Silent — only ever updates the row when it finds something
-        /// newer, so a transient network hiccup can't clobber a
-        /// previously-found update with a false "up to date."
-        func checkForUpdate() {
+        /// `interactive` distinguishes a user-clicked check (shows a
+        /// "Checking…" state and reverts to "up to date" if nothing's
+        /// found) from the silent background poll (which only ever
+        /// updates the row when it finds something newer, so a transient
+        /// network hiccup can't clobber a previously-found update).
+        func checkForUpdate(interactive: Bool) {
+            if interactive {
+                MainActor.assumeIsolated { menuBar.setCheckingForUpdate() }
+            }
             UpdateChecker.checkForUpdate { tag in
-                guard let tag else { return }
                 DispatchQueue.main.async {
-                    MainActor.assumeIsolated { menuBar.setUpdateAvailable(tag) }
+                    MainActor.assumeIsolated {
+                        if let tag {
+                            menuBar.setUpdateAvailable(tag)
+                        } else if interactive {
+                            menuBar.setUpToDate()
+                        }
+                    }
                 }
             }
         }
-        checkForUpdate()
+        checkForUpdate(interactive: false)
         let updateTimer = Timer.scheduledTimer(withTimeInterval: 86_400, repeats: true) { _ in
-            checkForUpdate()
+            checkForUpdate(interactive: false)
         }
         _ = updateTimer
 
@@ -139,6 +149,9 @@ struct Run: ParsableCommand {
                 } catch {
                     FileHandle.standardError.write(Data("launch-at-login change failed: \(error)\n".utf8))
                 }
+            }
+            menuBar.onCheckForUpdate = {
+                checkForUpdate(interactive: true)
             }
             menuBar.onInstallUpdate = { tag in
                 menuBar.setUpdateInstalling()
