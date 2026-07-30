@@ -1,5 +1,8 @@
 import AppKit
+import ApplicationServices
 import ArgumentParser
+import AVFoundation
+import Darwin
 import Foundation
 import WhisperKit
 
@@ -31,34 +34,40 @@ struct Run: ParsableCommand {
     @Flag(name: .long, help: "Disable the on-screen recording overlay.")
     var noOverlay: Bool = false
 
-    @Option(name: .long, help: "Model id to use. Defaults to the recommended model.")
+    @Flag(name: .long, help: "Stay attached to the terminal instead of detaching to the background.")
+    var foreground: Bool = false
+
+    @Option(name: .long, help: "Model id to use. Defaults to the last-selected or recommended model.")
     var model: String?
 
     func run() throws {
-        if !skipDoctor {
-            let checks = DoctorReport.run()
-            if !DoctorReport.allOK(checks) {
-                FileHandle.standardError.write(Data("startup checks failed:\n".utf8))
-                DoctorReport.print(checks)
-                FileHandle.standardError.write(Data("\nfix the above or pass --skip-doctor\n".utf8))
-                throw ExitCode(1)
-            }
+        if !foreground && isatty(STDOUT_FILENO) != 0 {
+            try daemonize()
+            return
         }
 
-        let chosenModel: TranscriptionModel
-        if let id = model {
-            guard let m = ModelRegistry.find(id) else {
-                FileHandle.standardError.write(Data("unknown model: \(id)\n".utf8))
-                FileHandle.standardError.write(Data("run `parrot models list` to see options.\n".utf8))
-                throw ExitCode(1)
-            }
-            chosenModel = m
-        } else {
-            guard let m = ModelRegistry.recommended() else {
-                FileHandle.standardError.write(Data("no models registered\n".utf8))
-                throw ExitCode(1)
-            }
-            chosenModel = m
+        let chosenModel = try resolveModel()
+
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
+
+        let toggles = RuntimeToggles(
+            overlayEnabled: !noOverlay,
+            dumpWavEnabled: dumpWav,
+            debugHotkeyEnabled: debugHotkey
+        )
+
+        let monitor = HotkeyMonitor(debug: toggles.debugHotkeyEnabled)
+        let capture = AudioCapture()
+        let overlay = MainActor.assumeIsolated { RecordingOverlay() }
+        capture.onLevel = { level in overlay.pushLevel(level) }
+        let menuBar = MainActor.assumeIsolated {
+            MenuBarController(
+                modelID: chosenModel.id,
+                overlayEnabled: toggles.overlayEnabled,
+                debugHotkeyEnabled: toggles.debugHotkeyEnabled,
+                dumpWavEnabled: toggles.dumpWavEnabled
+            )
         }
 
         let transcriber = WhisperKitTranscriber(model: chosenModel)
@@ -78,99 +87,258 @@ struct Run: ParsableCommand {
             throw ExitCode(1)
         }
 
-        let app = NSApplication.shared
-        app.setActivationPolicy(.accessory)
+        let session = TranscriberSession(initial: transcriber)
 
-        let monitor = HotkeyMonitor(debug: debugHotkey)
-        let capture = AudioCapture()
-        let dumpWav = self.dumpWav
-        let overlay: RecordingOverlay? = noOverlay ? nil : MainActor.assumeIsolated { RecordingOverlay() }
-        if let overlay {
-            capture.onLevel = { level in overlay.pushLevel(level) }
-        }
-        let menuBar = MainActor.assumeIsolated { MenuBarController(modelID: chosenModel.id) }
-
-        do {
-            try monitor.start { event in
-                switch event {
-                case .pressed:
+        MainActor.assumeIsolated {
+            menuBar.onSelectModel = { selected in
+                Task {
+                    await MainActor.run { menuBar.setModelLoading(selected.displayName) }
                     do {
-                        try capture.start()
-                        FileHandle.standardError.write(Data("● recording\n".utf8))
-                        MainActor.assumeIsolated {
-                            overlay?.show(.recording)
-                            menuBar.setRecording(true)
-                        }
+                        try await session.switchTo(selected)
+                        ModelPreference.selectedModelID = selected.id
+                        await MainActor.run { menuBar.setActiveModel(selected.id) }
                     } catch {
-                        FileHandle.standardError.write(Data("capture failed: \(error)\n".utf8))
+                        FileHandle.standardError.write(Data("model switch failed: \(error)\n".utf8))
+                        await MainActor.run { menuBar.setModelLoadFailed() }
                     }
-                case .released:
-                    let samples = capture.stop()
-                    MainActor.assumeIsolated {
-                        overlay?.show(.transcribing)
-                        menuBar.setTranscribing()
+                }
+            }
+            menuBar.onToggleOverlay = { enabled in
+                toggles.overlayEnabled = enabled
+                if !enabled { overlay.hide() }
+            }
+            menuBar.onToggleDebugHotkey = { enabled in
+                toggles.debugHotkeyEnabled = enabled
+                monitor.debug = enabled
+            }
+            menuBar.onToggleDumpWav = { enabled in
+                toggles.dumpWavEnabled = enabled
+            }
+            menuBar.onToggleLaunchAtLogin = { enabled in
+                do {
+                    if enabled {
+                        try LaunchAgentManager.install()
+                    } else {
+                        try LaunchAgentManager.uninstall()
                     }
-                    let seconds = Double(samples.count) / AudioCapture.targetSampleRate
-                    let rms = computeRMS(samples)
-                    FileHandle.standardError.write(Data(
-                        String(format: "○ captured %.2fs · rms %.3f\n", seconds, rms).utf8
-                    ))
-                    if dumpWav, !samples.isEmpty {
-                        let path = "/tmp/parrot-last.wav"
+                } catch {
+                    FileHandle.standardError.write(Data("launch-at-login change failed: \(error)\n".utf8))
+                }
+            }
+        }
+
+        /// Starts the hotkey tap and enters the run loop's event handling.
+        /// Only safe to call once accessibility is trusted.
+        func startDaemonLoop() throws {
+            do {
+                try monitor.start { event in
+                    switch event {
+                    case .pressed:
                         do {
-                            try WAVWriter.write(samples: samples, sampleRate: 16_000, to: path)
-                            FileHandle.standardError.write(Data("  wrote \(path)\n".utf8))
-                        } catch {
-                            FileHandle.standardError.write(Data("  wav write failed: \(error)\n".utf8))
-                        }
-                    }
-                    guard !samples.isEmpty else {
-                        MainActor.assumeIsolated {
-                            overlay?.hide()
-                            menuBar.setRecording(false)
-                        }
-                        return
-                    }
-                    Task {
-                        let started = Date()
-                        do {
-                            let text = try await transcriber.transcribe(samples)
-                            let elapsed = Date().timeIntervalSince(started)
-                            FileHandle.standardError.write(Data(
-                                String(format: "→ %.2fs · %@\n", elapsed, text).utf8
-                            ))
-                            await MainActor.run {
-                                TextInjector.inject(text)
-                                overlay?.hide()
-                                menuBar.setRecording(false)
+                            try capture.start()
+                            FileHandle.standardError.write(Data("● recording\n".utf8))
+                            MainActor.assumeIsolated {
+                                if toggles.overlayEnabled { overlay.show(.recording) }
+                                menuBar.setRecording(true)
                             }
                         } catch {
-                            FileHandle.standardError.write(Data("transcription failed: \(error)\n".utf8))
-                            await MainActor.run {
-                                overlay?.hide()
+                            FileHandle.standardError.write(Data("capture failed: \(error)\n".utf8))
+                        }
+                    case .released:
+                        let samples = capture.stop()
+                        MainActor.assumeIsolated {
+                            if toggles.overlayEnabled { overlay.show(.transcribing) }
+                            menuBar.setTranscribing()
+                        }
+                        let seconds = Double(samples.count) / AudioCapture.targetSampleRate
+                        let rms = computeRMS(samples)
+                        FileHandle.standardError.write(Data(
+                            String(format: "○ captured %.2fs · rms %.3f\n", seconds, rms).utf8
+                        ))
+                        if toggles.dumpWavEnabled, !samples.isEmpty {
+                            let path = "/tmp/parrot-last.wav"
+                            do {
+                                try WAVWriter.write(samples: samples, sampleRate: 16_000, to: path)
+                                FileHandle.standardError.write(Data("  wrote \(path)\n".utf8))
+                            } catch {
+                                FileHandle.standardError.write(Data("  wav write failed: \(error)\n".utf8))
+                            }
+                        }
+                        guard !samples.isEmpty else {
+                            MainActor.assumeIsolated {
+                                overlay.hide()
                                 menuBar.setRecording(false)
+                            }
+                            return
+                        }
+                        Task {
+                            let started = Date()
+                            do {
+                                let text = try await session.transcribe(samples)
+                                let elapsed = Date().timeIntervalSince(started)
+                                FileHandle.standardError.write(Data(
+                                    String(format: "→ %.2fs · %@\n", elapsed, text).utf8
+                                ))
+                                await MainActor.run {
+                                    TextInjector.inject(text)
+                                    overlay.hide()
+                                    menuBar.setRecording(false)
+                                }
+                            } catch {
+                                FileHandle.standardError.write(Data("transcription failed: \(error)\n".utf8))
+                                await MainActor.run {
+                                    overlay.hide()
+                                    menuBar.setRecording(false)
+                                }
                             }
                         }
                     }
                 }
+            } catch {
+                FileHandle.standardError.write(Data("failed to register hotkey tap: \(error)\n".utf8))
+                throw ExitCode(1)
             }
-        } catch {
-            FileHandle.standardError.write(Data("failed to register hotkey tap: \(error)\n".utf8))
-            FileHandle.standardError.write(Data("run `parrot setup` to configure permissions.\n".utf8))
+
+            let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+            sigint.setEventHandler {
+                FileHandle.standardError.write(Data("\nshutting down\n".utf8))
+                monitor.stop()
+                NSApp.terminate(nil)
+            }
+            sigint.resume()
+            signal(SIGINT, SIG_IGN)
+
+            FileHandle.standardError.write(Data("listening on fn hold · model: \(chosenModel.id) · ^C to quit\n".utf8))
+        }
+
+        // `--skip-doctor` (used by the LaunchAgent, which already ran through
+        // setup once) trusts the caller and skips straight to starting —
+        // same as before, it just fails loudly if accessibility isn't
+        // actually granted.
+        if skipDoctor {
+            try startDaemonLoop()
+            app.run()
+            return
+        }
+
+        if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+            AVCaptureDevice.requestAccess(for: .audio) { _ in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated { menuBar.refreshPermissionStatus() }
+                }
+            }
+        }
+
+        if AXIsProcessTrusted() {
+            try startDaemonLoop()
+        } else {
+            // Accessibility isn't granted yet. The menu bar is already up —
+            // show its Setup section, trigger the OS prompt, and poll until
+            // the grant lands. A trust grant only takes effect for a fresh
+            // process, so once it does, relaunch instead of trying to
+            // continue in this one.
+            MainActor.assumeIsolated { menuBar.setWaitingForPermissions() }
+            PermissionActions.promptAccessibility()
+            var pollTimer: Timer?
+            pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
+                MainActor.assumeIsolated { menuBar.refreshPermissionStatus() }
+                if AXIsProcessTrusted() {
+                    pollTimer?.invalidate()
+                    Self.relaunchSelf(args: self.daemonArguments(skipDoctor: true))
+                }
+            }
+        }
+
+        app.run()
+    }
+
+    /// Forks a detached background process and returns, freeing the
+    /// terminal. Only called when stdout is a TTY, so `parrot install
+    /// --launch-at-login` (which runs under launchd, not a terminal) is
+    /// unaffected. Permission setup now happens visibly in the child's menu
+    /// bar rather than blocking here.
+    private func daemonize() throws {
+        let process = try Self.spawnSelf(args: daemonArguments(skipDoctor: false))
+        print("parrot running in background (pid \(process.processIdentifier))")
+        print("check the menu bar bird icon — it'll walk you through any permissions needed")
+        print("logs: /tmp/parrot.out.log, /tmp/parrot.err.log")
+    }
+
+    /// Spawns a replacement process once accessibility has just been
+    /// granted (a trust grant only takes effect for a fresh process), then
+    /// terminates this one.
+    private static func relaunchSelf(args: [String]) {
+        guard let process = try? spawnSelf(args: args) else {
+            FileHandle.standardError.write(Data("relaunch failed\n".utf8))
+            return
+        }
+        _ = process
+        NSApp.terminate(nil)
+    }
+
+    private static func spawnSelf(args: [String]) throws -> Process {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: resolveExecutablePath())
+        process.arguments = args
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = openLogHandle("/tmp/parrot.out.log")
+        process.standardError = openLogHandle("/tmp/parrot.err.log")
+        try process.run()
+        return process
+    }
+
+    private func daemonArguments(skipDoctor forceSkipDoctor: Bool) -> [String] {
+        var args = ["run", "--foreground"]
+        if forceSkipDoctor { args.append("--skip-doctor") }
+        if let model {
+            args += ["--model", model]
+        }
+        if debugHotkey { args.append("--debug-hotkey") }
+        if dumpWav { args.append("--dump-wav") }
+        if noOverlay { args.append("--no-overlay") }
+        return args
+    }
+
+    /// Resolves the absolute path of the binary currently running, regardless
+    /// of whether it was invoked via an absolute path, a relative path, or
+    /// found on PATH — so the re-exec'd child always matches this build, not
+    /// whatever happens to be installed at /usr/local/bin/parrot.
+    private static func resolveExecutablePath() -> String {
+        var size: UInt32 = 0
+        _NSGetExecutablePath(nil, &size)
+        var buffer = [Int8](repeating: 0, count: Int(size))
+        guard _NSGetExecutablePath(&buffer, &size) == 0 else {
+            return "/usr/local/bin/parrot"
+        }
+        return String(cString: buffer)
+    }
+
+    private static func openLogHandle(_ path: String) -> FileHandle {
+        if !FileManager.default.fileExists(atPath: path) {
+            FileManager.default.createFile(atPath: path, contents: nil)
+        }
+        let handle = FileHandle(forWritingAtPath: path) ?? FileHandle.nullDevice
+        handle.seekToEndOfFile()
+        return handle
+    }
+
+    private func resolveModel() throws -> TranscriptionModel {
+        if let id = model {
+            guard let m = ModelRegistry.find(id) else {
+                FileHandle.standardError.write(Data("unknown model: \(id)\n".utf8))
+                FileHandle.standardError.write(Data("run `parrot models list` to see options.\n".utf8))
+                throw ExitCode(1)
+            }
+            return m
+        }
+        if let savedID = ModelPreference.selectedModelID, let m = ModelRegistry.find(savedID) {
+            return m
+        }
+        guard let m = ModelRegistry.recommended() else {
+            FileHandle.standardError.write(Data("no models registered\n".utf8))
             throw ExitCode(1)
         }
-
-        let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-        sigint.setEventHandler {
-            FileHandle.standardError.write(Data("\nshutting down\n".utf8))
-            monitor.stop()
-            NSApp.terminate(nil)
-        }
-        sigint.resume()
-        signal(SIGINT, SIG_IGN)
-
-        FileHandle.standardError.write(Data("listening on fn hold · model: \(chosenModel.id) · ^C to quit\n".utf8))
-        app.run()
+        return m
     }
 }
 
