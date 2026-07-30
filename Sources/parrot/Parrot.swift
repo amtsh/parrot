@@ -75,6 +75,20 @@ struct Run: ParsableCommand {
             RunLock.release()
         }
 
+        func checkForUpdate() {
+            UpdateChecker.checkForUpdate { tag in
+                guard let tag else { return }
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated { menuBar.setUpdateAvailable(tag) }
+                }
+            }
+        }
+        checkForUpdate()
+        let updateTimer = Timer.scheduledTimer(withTimeInterval: 86_400, repeats: true) { _ in
+            checkForUpdate()
+        }
+        _ = updateTimer
+
         let transcriber = WhisperKitTranscriber(model: chosenModel)
         let warmupSemaphore = DispatchSemaphore(value: 0)
         var warmupError: Error?
@@ -121,6 +135,22 @@ struct Run: ParsableCommand {
                     }
                 } catch {
                     FileHandle.standardError.write(Data("launch-at-login change failed: \(error)\n".utf8))
+                }
+            }
+            menuBar.onInstallUpdate = { tag in
+                menuBar.setUpdateInstalling()
+                DispatchQueue.global(qos: .userInitiated).async {
+                    do {
+                        try SelfUpdater.install(tag: tag)
+                        DispatchQueue.main.async {
+                            Self.relaunchSelf(args: self.daemonArguments(skipDoctor: true))
+                        }
+                    } catch {
+                        FileHandle.standardError.write(Data("update failed: \(error)\n".utf8))
+                        DispatchQueue.main.async {
+                            MainActor.assumeIsolated { menuBar.setUpdateFailed() }
+                        }
+                    }
                 }
             }
         }

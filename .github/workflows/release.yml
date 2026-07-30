@@ -30,6 +30,11 @@ jobs:
           key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
           restore-keys: spm-${{ runner.os }}-
 
+      - name: embed version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          echo "let parrotVersion = \"${{ github.ref_name }}\"" > Sources/parrot/Version.swift
+
       - name: build
         run: swift build -c release --arch arm64
 
